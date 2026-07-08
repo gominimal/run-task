@@ -1,0 +1,34 @@
+name: Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  hello-world:
+    name: hello-world (${{ matrix.runner }})
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-latest, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Run hello-world task
+        id: run-task
+        uses: ./
+        with:
+          channel: unstable
+          task: hello-world
+
+      - name: Verify version output
+        env:
+          VERSION: ${{ steps.run-task.outputs.version }}
+        run: |
+          echo "Resolved version: $VERSION"
+          if [ -z "$VERSION" ]; then
+            echo "::error::action did not set the 'version' output"
+            exit 1
+          fi

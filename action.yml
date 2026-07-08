@@ -1,0 +1,75 @@
+name: 'minimal run-task'
+description: 'Runs the task declared in a repo''s `minimal.toml` file'
+inputs:
+  task:
+    description: 'Name of the task to run'
+    required: true
+  channel:
+    description: 'The release channel to fetch Minimal from'
+    required: false
+    default: 'stable'
+outputs:
+  version:
+    description: 'The specific version that was resolved and run'
+    value: ${{ steps.run.outputs.version }}
+runs:
+  using: 'composite'
+  steps:
+    - id: run
+      shell: bash
+      env:
+        BASE: https://storage.googleapis.com/minimal-one
+        INPUT_TASK: ${{ inputs.task }}          # via env, not inline — injection-safe
+        INPUT_CHANNEL: ${{ inputs.channel }}
+      run: |
+        # ---- platform guard: bail before any bash-4+ syntax appears ----
+        if [ "${RUNNER_OS:-$(uname -s)}" != "Linux" ]; then
+          echo "::error::gominimal/run-task supports Linux only (got ${RUNNER_OS:-$(uname -s)})"
+          exit 1
+        fi
+
+        set -euo pipefail   # everything below is free to use modern bash
+
+        # ---- ensure unprivileged user namespaces are usable (idempotent) ----
+        userns_knob=/proc/sys/kernel/apparmor_restrict_unprivileged_userns
+        if [[ -e "$userns_knob" ]]; then
+          if [[ "$(cat "$userns_knob")" != "0" ]]; then
+            echo "Lifting AppArmor unprivileged-userns restriction for mip"
+            if ! sudo -n sysctl -w kernel.apparmor_restrict_unprivileged_userns=0; then
+              echo "::error::passwordless sudo unavailable; set 'kernel.apparmor_restrict_unprivileged_userns=0' on this runner yourself (see README)"
+              exit 1
+            fi
+          else
+            echo "Unprivileged user namespaces already permitted"
+          fi
+        else
+          echo "No AppArmor userns restriction on this kernel; nothing to do"
+        fi
+
+        # hardened fetch: $1 = URL, $2 = output file
+        fetch() {
+          curl --proto '=https' --proto-redir '=https' --tlsv1.2 --retry 3 -fsSL "$1" -o "$2"
+        }
+
+        arch="$(uname -m)"
+        case "$arch" in
+          x86_64|amd64)  arch="amd64" ;;
+          aarch64|arm64) arch="arm64" ;;
+          *) echo "::error::unsupported arch: $arch"; exit 1 ;;
+        esac
+
+        # ---- resolve version from the channel pointer ----
+        ptr="$RUNNER_TEMP/channel-pointer"
+        fetch "$BASE/$INPUT_CHANNEL" "$ptr"
+        version="$(tr -d '[:space:]' < "$ptr")"
+        [[ -n "$version" ]] || { echo "::error::empty version from channel '$INPUT_CHANNEL'"; exit 1; }
+        echo "Resolved minimal version: $version (channel: $INPUT_CHANNEL)"
+
+        # ---- fetch mip ----
+        bin="$RUNNER_TEMP/mip"
+        fetch "$BASE/versions/$version/mip-linux-$arch" "$bin"
+        chmod +x "$bin"
+
+        # ---- run ----
+        echo "version=$version" >> "$GITHUB_OUTPUT"
+        "$bin" run "$INPUT_TASK"

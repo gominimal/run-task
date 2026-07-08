@@ -1,0 +1,12 @@
+[upstream] # Source of software & tooling
+repo = "https://github.com/gominimal/pkgs"
+branch = "main"
+locked_commit = "99f1af9252b16729ae396d1aff77d74ffa477639"
+
+[stack]
+use = "shell"
+
+[tasks.hello-world]
+interactive = true
+packages = ["base"]
+exec = "bash -c 'echo Hello World!!'"
