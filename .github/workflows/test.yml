@@ -4,17 +4,22 @@ on:
   push:
     branches: [main]
   pull_request:
+  schedule:
+    # every other day at 06:00 UTC (odd days of the month)
+    - cron: '0 6 */2 * *'
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
   hello-world:
-    name: hello-world (${{ matrix.runner }})
+    name: hello-world (${{ matrix.runner }}, ${{ matrix.channel }})
     strategy:
       fail-fast: false
       matrix:
         runner: [ubuntu-latest, ubuntu-24.04-arm]
+        channel: [stable, unstable, nightly]
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v7
@@ -23,7 +28,7 @@ jobs:
         id: run-task
         uses: ./
         with:
-          channel: unstable
+          channel: ${{ matrix.channel }}
           task: hello-world
 
       - name: Verify version output
