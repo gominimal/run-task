@@ -10,15 +10,13 @@ A Github Action that executes a `minimal.toml`-defined task on a Linux runner.
 
 ## Usage
 
-The following example steps run the `hello-world` task on the Github runner, using a version
-of Minimal fetched from the `unstable` channel.
+The following example steps run the `hello-world` task on the Github runner.
 
 ```yaml
  - uses: actions/checkout@v7 # Checkout the repo to access its `minimal.toml`
  - name: Run hello-world task
    uses: gominimal/run-task@v1
    with:
-     channel: unstable
      task: hello-world
 ```
 
