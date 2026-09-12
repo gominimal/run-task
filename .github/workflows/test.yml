@@ -54,6 +54,12 @@ jobs:
       (needs.hello-world.result == 'failure' || needs.hello-world.result == 'cancelled')
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    # Serialize: two overlapping runs could both miss the open issue and file
+    # duplicates. Queue rather than cancel so no notification is dropped.
+    concurrency:
+      group: nightly-failure-notification-${{ github.repository }}
+      cancel-in-progress: false
+      queue: max
     permissions:
       contents: read
       issues: write
@@ -81,6 +87,8 @@ jobs:
           echo "url=$url" >> "$GITHUB_OUTPUT"
 
       - name: Notify Slack
+        # Still post if the issue step failed (e.g. gh error); the URL is then empty.
+        if: ${{ always() }}
         continue-on-error: true
         timeout-minutes: 5
         uses: slackapi/slack-github-action@dcb1066f776dd043e64d0e8ba94ca15cc7e1875d # v4.0.0
@@ -89,5 +97,5 @@ jobs:
           webhook-type: incoming-webhook
           payload: |
             {
-              "text": "*Scheduled test lane failed:* `${{ github.repository }}`\nhello-world matrix: ${{ needs.hello-world.result }}\nIssue: ${{ steps.issue.outputs.url }}\nRun: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+              "text": "*Scheduled test lane failed:* `${{ github.repository }}`\nhello-world matrix: ${{ needs.hello-world.result }}\nIssue: ${{ steps.issue.outputs.url || 'unavailable' }}\nRun: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
             }
