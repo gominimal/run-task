@@ -40,3 +40,54 @@ jobs:
             echo "::error::action did not set the 'version' output"
             exit 1
           fi
+
+  notify:
+    # Scheduled runs are unattended: on a failed or cancelled matrix job, file
+    # (or comment on) one label-deduped tracking issue and post to Slack via
+    # the org's promotion-notification webhook (same action/shape as
+    # gominimal/minimal's promote.yml). PR and push runs already surface
+    # failures on the commit/PR, so this only fires for schedule/dispatch.
+    needs: [hello-world]
+    if: >-
+      always() &&
+      (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') &&
+      (needs.hello-world.result == 'failure' || needs.hello-world.result == 'cancelled')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Open or update the nightly-failure issue
+        id: issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          RESULT: ${{ needs.hello-world.result }}
+        run: |
+          set -euo pipefail
+          title="Scheduled test lane failing"
+          gh label create ci-nightly --repo "$GITHUB_REPOSITORY" \
+            --color B60205 --description "Scheduled test-lane failure" 2>/dev/null || true
+          body="$(printf 'A scheduled Test run failed or was cancelled.\n\n- hello-world matrix: %s\n\nRun: %s' "$RESULT" "$RUN_URL")"
+          existing="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open \
+            --label ci-nightly --json number --jq '.[0].number // empty')"
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --repo "$GITHUB_REPOSITORY" --body "$body"
+            url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/issues/$existing"
+          else
+            url="$(gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body "$body" --label ci-nightly)"
+          fi
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+
+      - name: Notify Slack
+        continue-on-error: true
+        timeout-minutes: 5
+        uses: slackapi/slack-github-action@dcb1066f776dd043e64d0e8ba94ca15cc7e1875d # v4.0.0
+        with:
+          webhook: ${{ secrets.SLACK_WEBHOOK_URL }}
+          webhook-type: incoming-webhook
+          payload: |
+            {
+              "text": "*Scheduled test lane failed:* `${{ github.repository }}`\nhello-world matrix: ${{ needs.hello-world.result }}\nIssue: ${{ steps.issue.outputs.url }}\nRun: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            }
