@@ -97,5 +97,5 @@ jobs:
           webhook-type: incoming-webhook
           payload: |
             {
-              "text": "*Scheduled test lane failed:* `${{ github.repository }}`\nhello-world matrix: ${{ needs.hello-world.result }}\nIssue: ${{ steps.issue.outputs.url || 'unavailable' }}\nRun: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+              "text": "*Scheduled test lane failed or was cancelled:* `${{ github.repository }}`\nhello-world matrix: ${{ needs.hello-world.result }}\nIssue: ${{ steps.issue.outputs.url || 'unavailable' }}\nRun: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
             }
