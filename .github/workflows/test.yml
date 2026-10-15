@@ -40,3 +40,45 @@ jobs:
             echo "::error::action did not set the 'version' output"
             exit 1
           fi
+
+  hello-env:
+    name: hello-env (allow-env, ${{ matrix.channel }})
+    strategy:
+      fail-fast: false
+      matrix:
+        channel: [stable, unstable]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Run hello-env task with the variable allowed
+        uses: ./
+        env:
+          RUN_TASK_GREETING: hello from the runner
+        with:
+          channel: ${{ matrix.channel }}
+          task: hello-env
+          allow-env: |
+            RUN_TASK_GREETING
+
+  task-failure:
+    name: failing task fails the step
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Run a task that does not exist
+        id: missing
+        continue-on-error: true
+        uses: ./
+        with:
+          task: no-such-task
+
+      - name: Verify the step failed
+        env:
+          OUTCOME: ${{ steps.missing.outcome }}
+        run: |
+          if [ "$OUTCOME" != "failure" ]; then
+            echo "::error::expected the missing task to fail the step, got '$OUTCOME'"
+            exit 1
+          fi
