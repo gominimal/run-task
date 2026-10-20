@@ -87,8 +87,13 @@ runs:
         echo "$bin" >> "$GITHUB_PATH"
         installed="$(min --version)"
         echo "Installed: $installed"
-        case "$installed" in
-          *"$version"*) ;;
+        # `min --version` prints `min <version>`. A release pointer names the
+        # version itself (0.7.0); nightly/unstable pointers name a commit,
+        # which a dev build carries as its `.g<sha>` suffix
+        # (0.8.0-dev.362.ga3f2fa97).
+        installed_version="${installed##* }"
+        case "$installed_version" in
+          "$version"|*".g$version") ;;
           *) echo "::warning::installed '$installed' does not name the resolved version '$version' (the channel pointer moved during the step?)" ;;
         esac
 
