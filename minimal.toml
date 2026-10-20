@@ -7,6 +7,12 @@ locked_commit = "99f1af9252b16729ae396d1aff77d74ffa477639"
 use = "shell"
 
 [tasks.hello-world]
-interactive = true
 packages = ["base"]
-exec = "bash -c 'echo Hello World!!'"
+bash = "echo Hello World!!"
+
+# Exercises the `allow-env` input: fails unless RUN_TASK_GREETING reaches the
+# task, which only happens when the runner's user policy allows the name.
+[tasks.hello-env]
+packages = ["base"]
+env_vars.RUN_TASK_GREETING = { inherit = true }
+bash = "test -n \"$RUN_TASK_GREETING\" && echo \"$RUN_TASK_GREETING\""

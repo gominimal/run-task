@@ -1,16 +1,24 @@
 name: 'minimal run-task'
-description: 'Runs the task declared in a repo''s `minimal.toml` file'
+description: 'Runs a task declared in a repo''s `minimal.toml` with `min task run`'
 inputs:
   task:
     description: 'Name of the task to run'
     required: true
   channel:
-    description: 'The release channel to fetch Minimal from'
+    description: 'The release channel to install Minimal from (stable, unstable, nightly)'
     required: false
     default: 'stable'
+  allow-env:
+    description: >-
+      Environment variable names (one per line, globs allowed) the task's
+      `env_vars` may inherit from the runner. Written to the runner user's
+      `~/.config/minimal/user_policy.toml` `[vars] allow`; without a terminal,
+      `min task run` fails on any declared name the policy does not list.
+    required: false
+    default: ''
 outputs:
   version:
-    description: 'The specific version that was resolved and run'
+    description: 'The specific version that the channel resolved to'
     value: ${{ steps.run.outputs.version }}
 runs:
   using: 'composite'
@@ -19,8 +27,10 @@ runs:
       shell: bash
       env:
         BASE: https://storage.googleapis.com/minimal-one
+        INSTALLER: https://go.minimal.dev
         INPUT_TASK: ${{ inputs.task }}          # via env, not inline — injection-safe
         INPUT_CHANNEL: ${{ inputs.channel }}
+        INPUT_ALLOW_ENV: ${{ inputs.allow-env }}
       run: |
         # ---- platform guard: bail before any bash-4+ syntax appears ----
         if [ "${RUNNER_OS:-$(uname -s)}" != "Linux" ]; then
@@ -34,7 +44,7 @@ runs:
         userns_knob=/proc/sys/kernel/apparmor_restrict_unprivileged_userns
         if [[ -e "$userns_knob" ]]; then
           if [[ "$(cat "$userns_knob")" != "0" ]]; then
-            echo "Lifting AppArmor unprivileged-userns restriction for mip"
+            echo "Lifting AppArmor unprivileged-userns restriction for minimald"
             if ! sudo -n sysctl -w kernel.apparmor_restrict_unprivileged_userns=0; then
               echo "::error::passwordless sudo unavailable; set 'kernel.apparmor_restrict_unprivileged_userns=0' on this runner yourself (see README)"
               exit 1
@@ -51,11 +61,8 @@ runs:
           curl --proto '=https' --proto-redir '=https' --tlsv1.2 --retry 3 -fsSL "$1" -o "$2"
         }
 
-        arch="$(uname -m)"
-        case "$arch" in
-          x86_64|amd64)  arch="amd64" ;;
-          aarch64|arm64) arch="arm64" ;;
-          *) echo "::error::unsupported arch: $arch"; exit 1 ;;
+        case "$INPUT_CHANNEL" in
+          ''|.|..|*[!A-Za-z0-9._-]*) echo "::error::invalid channel '$INPUT_CHANNEL'"; exit 1 ;;
         esac
 
         # ---- resolve version from the channel pointer ----
@@ -64,12 +71,55 @@ runs:
         version="$(tr -d '[:space:]' < "$ptr")"
         [[ -n "$version" ]] || { echo "::error::empty version from channel '$INPUT_CHANNEL'"; exit 1; }
         echo "Resolved minimal version: $version (channel: $INPUT_CHANNEL)"
+        echo "version=$version" >> "$GITHUB_OUTPUT"
 
-        # ---- fetch mip ----
-        bin="$RUNNER_TEMP/mip"
-        fetch "$BASE/versions/$version/mip-linux-$arch" "$bin"
-        chmod +x "$bin"
+        # ---- install min + minimald with the release installer ----
+        # The installer resolves the same channel pointer, verifies every
+        # component against the version's manifest, and installs to
+        # ~/.local/bin. No terminal: it neither prompts nor runs
+        # `min finalize-install` (the userns sysctl above is the one part of
+        # that we need).
+        installer="$RUNNER_TEMP/minimal-install.sh"
+        fetch "$INSTALLER/$INPUT_CHANNEL" "$installer"
+        MINIMAL_INSTALL_PLAIN=1 sh "$installer" </dev/null
+        bin="${MINIMAL_BIN:-$HOME/.local/bin}"
+        export PATH="$bin:$PATH"
+        echo "$bin" >> "$GITHUB_PATH"
+        installed="$(min --version)"
+        echo "Installed: $installed"
+        # `min --version` prints `min <version>`. A release pointer names the
+        # version itself (0.7.0); nightly/unstable pointers name a commit,
+        # which a dev build carries as its `.g<sha>` suffix
+        # (0.8.0-dev.362.ga3f2fa97).
+        installed_version="${installed##* }"
+        case "$installed_version" in
+          "$version"|*".g$version") ;;
+          *) echo "::warning::installed '$installed' does not name the resolved version '$version' (the channel pointer moved during the step?)" ;;
+        esac
+
+        # ---- env policy for the task's env_vars ----
+        if [[ -n "${INPUT_ALLOW_ENV//[[:space:]]/}" ]]; then
+          policy_dir="${XDG_CONFIG_HOME:-$HOME/.config}/minimal"
+          policy="$policy_dir/user_policy.toml"
+          if [[ -e "$policy" ]]; then
+            echo "::error::$policy already exists; manage its [vars] allow list yourself instead of passing allow-env"
+            exit 1
+          fi
+          allow=""
+          while IFS= read -r name; do
+            name="${name//[[:space:]]/}"
+            [[ -n "$name" ]] || continue
+            case "$name" in
+              *[!A-Za-z0-9_*?]*) echo "::error::allow-env entry '$name' is not an environment variable name or glob"; exit 1 ;;
+            esac
+            allow="${allow:+$allow, }\"$name\""
+          done <<< "$INPUT_ALLOW_ENV"
+          mkdir -p "$policy_dir"
+          printf '[vars]\nallow = [%s]\n' "$allow" > "$policy"
+          echo "Wrote $policy: allow = [$allow]"
+        fi
 
         # ---- run ----
-        echo "version=$version" >> "$GITHUB_OUTPUT"
-        "$bin" run "$INPUT_TASK"
+        # stdin closed: tasks run non-interactively, and an open pipe would
+        # keep the run waiting (gominimal/minimal#1741).
+        min task run "$INPUT_TASK" </dev/null
