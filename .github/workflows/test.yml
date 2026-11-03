@@ -61,6 +61,60 @@ jobs:
           allow-env: |
             RUN_TASK_GREETING
 
+  hooks:
+    name: hooks (${{ matrix.hooks || 'unset' }})
+    strategy:
+      fail-fast: false
+      matrix:
+        hooks: ['', ignore, allow]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Job-local: gives the checkout a project hook, so `min task run` has a
+      # hooks decision to make. Unstable only, where min gates project hooks.
+      - name: Declare a project lifecycle hook
+        run: |
+          printf '\n[[session.lifecycle_hooks]]\non_activate = { type = "inline", value = "echo run-task hook" }\n' >> minimal.toml
+
+      - name: Run hello-world task
+        id: run
+        continue-on-error: true
+        uses: ./
+        with:
+          channel: unstable
+          task: hello-world
+          hooks: ${{ matrix.hooks }}
+
+      - name: Verify the step outcome
+        env:
+          HOOKS: ${{ matrix.hooks }}
+          OUTCOME: ${{ steps.run.outcome }}
+        run: |
+          # Undecided hooks fail without a terminal; that failure is what
+          # makes the ignore and allow passes mean anything.
+          want=success
+          [ -n "$HOOKS" ] || want=failure
+          if [ "$OUTCOME" != "$want" ]; then
+            echo "::error::hooks='$HOOKS': expected $want, got '$OUTCOME'"
+            exit 1
+          fi
+
+      # A second call in the same job replaces the policy the first one wrote.
+      - name: Run hello-env task after the first call
+        if: matrix.hooks != ''
+        uses: ./
+        env:
+          RUN_TASK_GREETING: hello from the second step
+        with:
+          channel: unstable
+          task: hello-env
+          hooks: ${{ matrix.hooks }}
+          allow-env: |
+            RUN_TASK_GREETING
+
   task-failure:
     name: failing task fails the step
     runs-on: ubuntu-latest
