@@ -16,6 +16,15 @@ inputs:
       `min task run` fails on any declared name the policy does not list.
     required: false
     default: ''
+  hooks:
+    description: >-
+      What to do with the project's lifecycle hooks: `ignore` (drop them) or
+      `allow` (run them). Written to the same policy file as `allow-env`, as
+      `[hooks] ignore` or `allow` for the checkout directory only; without a
+      terminal, `min task run` fails on a project with hooks the policy does
+      not decide.
+    required: false
+    default: ''
 outputs:
   version:
     description: 'The specific version that the channel resolved to'
@@ -31,6 +40,7 @@ runs:
         INPUT_TASK: ${{ inputs.task }}          # via env, not inline — injection-safe
         INPUT_CHANNEL: ${{ inputs.channel }}
         INPUT_ALLOW_ENV: ${{ inputs.allow-env }}
+        INPUT_HOOKS: ${{ inputs.hooks }}
       run: |
         # ---- platform guard: bail before any bash-4+ syntax appears ----
         if [ "${RUNNER_OS:-$(uname -s)}" != "Linux" ]; then
@@ -65,6 +75,11 @@ runs:
           ''|.|..|*[!A-Za-z0-9._-]*) echo "::error::invalid channel '$INPUT_CHANNEL'"; exit 1 ;;
         esac
 
+        case "$INPUT_HOOKS" in
+          ''|ignore|allow) ;;
+          *) echo "::error::invalid hooks '$INPUT_HOOKS'; use 'ignore' or 'allow'"; exit 1 ;;
+        esac
+
         # ---- resolve version from the channel pointer ----
         ptr="$RUNNER_TEMP/channel-pointer"
         fetch "$BASE/$INPUT_CHANNEL" "$ptr"
@@ -97,14 +112,18 @@ runs:
           *) echo "::warning::installed '$installed' does not name the resolved version '$version' (the channel pointer moved during the step?)" ;;
         esac
 
-        # ---- env policy for the task's env_vars ----
-        if [[ -n "${INPUT_ALLOW_ENV//[[:space:]]/}" ]]; then
+        # ---- user policy for the task's env_vars and the project's hooks ----
+        if [[ -n "${INPUT_ALLOW_ENV//[[:space:]]/}" || -n "$INPUT_HOOKS" ]]; then
           policy_dir="${XDG_CONFIG_HOME:-$HOME/.config}/minimal"
           policy="$policy_dir/user_policy.toml"
-          if [[ -e "$policy" ]]; then
-            echo "::error::$policy already exists; manage its [vars] allow list yourself instead of passing allow-env"
+          # A file this action wrote (an earlier step in the same job) is
+          # replaced; any other file is the runner owner's and is left alone.
+          marker="# written by gominimal/run-task"
+          if [[ -e "$policy" ]] && [[ "$(head -n 1 "$policy")" != "$marker" ]]; then
+            echo "::error::$policy already exists; manage its [vars] and [hooks] rules yourself instead of passing allow-env or hooks"
             exit 1
           fi
+          content="$marker"$'\n'
           allow=""
           while IFS= read -r name; do
             name="${name//[[:space:]]/}"
@@ -114,9 +133,26 @@ runs:
             esac
             allow="${allow:+$allow, }\"$name\""
           done <<< "$INPUT_ALLOW_ENV"
+          if [[ -n "$allow" ]]; then
+            content+="[vars]"$'\n'"allow = [$allow]"$'\n'
+          fi
+          if [[ -n "$INPUT_HOOKS" ]]; then
+            # [hooks] patterns are globs matched against the project root, so
+            # a workspace path holding a glob or TOML metacharacter would match
+            # more (or less) than this checkout.
+            case "$GITHUB_WORKSPACE" in
+              /*) ;;
+              *) echo "::error::GITHUB_WORKSPACE '$GITHUB_WORKSPACE' is not an absolute path"; exit 1 ;;
+            esac
+            case "$GITHUB_WORKSPACE" in
+              *[][*?{}\\\"]*) echo "::error::GITHUB_WORKSPACE '$GITHUB_WORKSPACE' contains a glob or quote character; manage [hooks] in $policy yourself"; exit 1 ;;
+            esac
+            content+="[hooks]"$'\n'"$INPUT_HOOKS = [\"$GITHUB_WORKSPACE\"]"$'\n'
+          fi
           mkdir -p "$policy_dir"
-          printf '[vars]\nallow = [%s]\n' "$allow" > "$policy"
-          echo "Wrote $policy: allow = [$allow]"
+          printf '%s' "$content" > "$policy"
+          echo "Wrote $policy:"
+          cat "$policy"
         fi
 
         # ---- run ----

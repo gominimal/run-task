@@ -11,6 +11,7 @@ task exits.
  - Supports both x86_64 and arm64 architectures.
  - Selectable release channel
  - Tasks that inherit environment variables, through the `allow-env` input
+ - Projects with lifecycle hooks, through the `hooks` input
 
 ## Usage
 
@@ -28,7 +29,7 @@ The following example steps run the `hello-world` task on the Github runner.
 
  - `task` _(required)_: Name of the task to run
  - `channel`: Release channel to install Minimal from (`stable`, `unstable`, `nightly`); the channel is resolved to an exact version at run time. Defaults to `stable`.
- - `allow-env`: Environment variable names (one per line, globs allowed) that the task's `env_vars` may inherit from the runner. `min task run` checks every declared name against the runner user's `~/.config/minimal/user_policy.toml`, and without a terminal it fails on any name that file does not allow, so a task declaring `env_vars.FOO = { inherit = true }` needs `FOO` here. The action writes that file and refuses to overwrite one that already exists (self-hosted runners manage their own).
+ - `allow-env`: Environment variable names (one per line, globs allowed) that the task's `env_vars` may inherit from the runner. `min task run` checks every declared name against the runner user's `~/.config/minimal/user_policy.toml`, and without a terminal it fails on any name that file does not allow, so a task declaring `env_vars.FOO = { inherit = true }` needs `FOO` here. The action writes that file and refuses to overwrite one it did not write (self-hosted runners manage their own); a later call in the same job replaces the file an earlier call wrote, and a later call without `allow-env` or `hooks` leaves it in place.
 
    ```yaml
     - uses: gominimal/run-task@v2
@@ -38,6 +39,14 @@ The following example steps run the `hello-world` task on the Github runner.
         task: deploy
         allow-env: |
           FOO
+   ```
+ - `hooks`: `ignore` or `allow`, for a project whose `minimal.toml` declares lifecycle hooks. Without a terminal, `min task run` fails on a project whose hooks the policy does not decide. `ignore` drops the hooks and runs the task without them; `allow` runs them. Either is written to the same policy file as `allow-env`, as `[hooks] ignore` or `allow` for `$GITHUB_WORKSPACE` only. Unset by default, which leaves the decision to an existing policy.
+
+   ```yaml
+    - uses: gominimal/run-task@v2
+      with:
+        task: test
+        hooks: ignore
    ```
 
 ### Outputs
